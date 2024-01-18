@@ -1,0 +1,3 @@
+Implementation of synchronization primitives to implement a job scheduling and execution system. These jobs are submitted for execution and get scheduled according to the system's efficiency goals. The system being implemented handles a large volume of incoming jobs by using several admission queues to store jobs before they get scheduled into execution.
+
+In this system, each job needs specific resources and must be granted exclusive access to those resources before it can execute. Once a job has access to its necessary resources, it completes its execution and relinquishes access to them.

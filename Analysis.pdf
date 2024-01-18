@@ -1,0 +1,65 @@
+Starvation Discussion:
+Starvation occurs when some threads with higher priority make a shared resource unavailable for long periods of time resulting in other 
+threads not being serviced. In our case, assuming that jobs keep being submitted by users causing the admission queue for a certain job 
+type to always be full, there is a possibility of starvation occurring. There could be a scenario where the scheduler gives higher priority 
+to one of the admission queues, then that admission queue executes all of its jobs, leaving jobs in other admission queues to be starved of 
+the shared resources. More specifically, since the admission queue for a certain job type will always be at full capacity (ie QUEUE_LENGTH) 
+then the execution thread for that job type will always be getting signaled (ie pthread_cond_signal(&q->execution_cv)) causing the first job 
+in the corresponding admission queue to be executed which in turns signals the admission thread (ie pthread_cond_signal(&q->admission_cv)) 
+as a spot has opened up. This creates a circular pattern never allowing another thread to be executed as this thread has high priority and 
+will never return as it will always be full and executing jobs. Therefore, this starves all other threads. 
+
+Synchronization Bugs: 
+
+	A data race: 
+		Helgrind output:
+		Possible data race during write of size 4 at 0x10D230 by thread #3
+		Locks held:none
+		At 0x109A6B: admit_jobs (jobs.c: 164)
+		This conflicts with a previous read of size 4 by thread #2
+		Locks held 1, at address 0x10D1A0
+		At 0x109FE1: execute_jobs (jobs.c:224)
+		
+		This means that when there are no locks over a critical section then a thread can alter the data that is being shared with another thread. If Thread #3 writes to a variable before 
+		Thread #2 can finish its execution of the critical section then Thread #2 will have undefined behavior. This is because Thread #2 was supposed to be executed under the assumption 
+		that the variable was not going to be changed at some point through its execution of the critical section.
+	
+	A missing (and necessary) unlock:
+		Helgrind output:
+		Thread #5: Existing thread still holds 1 lock.
+		By 0x109C37 admit_jobs (jobs.c: 193)
+
+		This means that a thread has never unlocked the lock that it held. This can cause a deadlock due to Thread #5 holding lock 1 and if there is another Thread waiting for lock 1 to 
+		become available it will end up waiting indefinitely as Thread #5 never unlocks since the unlock statement is missing.
+
+	Unlocking a not-locked mutex:
+		Helgrind output:
+		Thread #5 unlocked a not-locked lock at 0x10D250
+		By 0x109C2B admit_jobs (jobs.c:192)
+
+		Unlocking a not-locked mutex will cause undefined behavior. Undefined behavior means anything can happen, including the program appearing to run correctly, the program crashing, 
+		or memory elsewhere getting corrupted and a problem not being visible until later. This could also cause the pthread_mutex_unlock to return an error instead of 0 if the mutex type 
+		if If the PTHREAD_MUTEX_ERRORCHECK.
+
+	Unlock a mutex held by a different thread:
+		Helgrind output:
+		Thread #5: unlocked lock at 0x10D4E0 currently held by thread #2
+		By 0x109C35: admit_jobs (jobs.c:188)
+
+		This error occurs when trying to unlock a mutex held by a different thread. This can lead to Thread #5 having access to the critical section and shared data of Thread #2 and can 
+		alter the data that is being shared. This could cause a data race.
+
+
+	Calling pthread_cond_wait with a not-locked mutex, or one locked by a different thread:
+		Helgrind output:
+		Thread #4: pthread_cond_{timed}wait called with un-held mutex
+		By 0x109CB6: execute_jobs (jobs.c:230)
+
+		This error occurs when calling pthread_cond_wait() with a mutex that has not been locked. Failing to lock the mutex before calling pthread_cond_wait() may cause it not to block the 
+		calling thread (Thread #4). This causes undefined behavior.
+
+
+
+
+
+
